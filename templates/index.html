@@ -14,11 +14,34 @@
     <section class="hero">
       <p class="eyebrow">Amazon Seller Central</p>
       <h1>Summary 压缩包一键解析</h1>
-      <p class="intro">上传一个包含全部 PDF 的 <code>zip</code> 或 <code>rar</code> 压缩包，系统会自动解压、解析、生成 Excel，并在页面上展示处理进度和失败明细。</p>
+      <p class="intro">上传一个包含全部 PDF 的 <code>zip</code> 或 <code>rar</code> 压缩包，或者直接选择多个 <code>PDF</code>。系统会按账期月份匹配你维护的汇率，自动解析并生成 Excel。</p>
     </section>
 
     <section class="panel">
       <form id="upload-form" class="upload-form">
+        <div class="toolbar">
+          <button id="rates-toggle-btn" class="ghost-btn" type="button">汇率维护</button>
+          <p class="toolbar-note">汇率默认为空，请先按月份维护美国 / 加拿大汇率，解析时会按 PDF 账期自动匹配。</p>
+        </div>
+
+        <section id="rates-panel" class="rates-panel hidden">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">汇率配置</p>
+              <h2>按月份维护</h2>
+            </div>
+          </div>
+          <div class="rates-help">
+            每条配置对应一个月份和一个站点。系统会根据 PDF 识别出的账期月份，自动匹配对应汇率。
+          </div>
+          <div id="rates-list" class="rates-list"></div>
+          <div class="rates-actions">
+            <button id="add-rate-row-btn" class="ghost-btn" type="button">新增一行</button>
+            <button id="save-rates-btn" class="submit-btn secondary" type="button">同步汇率</button>
+          </div>
+          <p id="rates-status" class="rates-status"></p>
+        </section>
+
         <div class="upload-grid">
           <label id="upload-box" class="upload-box" for="archive">
             <input id="archive" name="archive" type="file" accept=".zip,.rar">
@@ -143,6 +166,12 @@
     const pdfUploadBox = document.getElementById('pdf-upload-box');
     const pdfUploadTitle = document.getElementById('pdf-upload-title');
     const pdfUploadSubtitle = document.getElementById('pdf-upload-subtitle');
+    const ratesToggleBtn = document.getElementById('rates-toggle-btn');
+    const ratesPanel = document.getElementById('rates-panel');
+    const ratesList = document.getElementById('rates-list');
+    const addRateRowBtn = document.getElementById('add-rate-row-btn');
+    const saveRatesBtn = document.getElementById('save-rates-btn');
+    const ratesStatus = document.getElementById('rates-status');
     const submitBtn = document.getElementById('submit-btn');
     const selectedFile = document.getElementById('selected-file');
     const selectedFileName = document.getElementById('selected-file-name');
@@ -169,9 +198,106 @@
     const historyPanel = document.getElementById('history-panel');
     const historyList = document.getElementById('history-list');
     const JOB_STORAGE_KEY = 'summaryAmazonPdfCurrentJobId';
+    const RATE_COUNTRIES = ['美国', '加拿大'];
 
     let timer = null;
     let currentJobId = null;
+    let exchangeRatesLoaded = false;
+
+    function createRateRow(entry = {}) {
+      const row = document.createElement('div');
+      row.className = 'rate-row';
+      row.innerHTML = `
+        <label>
+          <span>月份</span>
+          <input type="month" class="rate-month" value="${entry.month || ''}">
+        </label>
+        <label>
+          <span>站点</span>
+          <select class="rate-country">
+            <option value="">请选择站点</option>
+            ${RATE_COUNTRIES.map(country => `<option value="${country}" ${entry.country === country ? 'selected' : ''}>${country}</option>`).join('')}
+          </select>
+        </label>
+        <label>
+          <span>汇率</span>
+          <input type="number" class="rate-value" value="${entry.rate ?? ''}" step="0.000001" min="0" placeholder="例如 7.1234">
+        </label>
+        <button type="button" class="rate-remove-btn">删除</button>
+      `;
+      row.querySelector('.rate-remove-btn').addEventListener('click', () => {
+        row.remove();
+        if (!ratesList.children.length) {
+          ratesList.appendChild(createRateRow());
+        }
+      });
+      return row;
+    }
+
+    function renderRateRows(entries) {
+      ratesList.innerHTML = '';
+      if (!entries || entries.length === 0) {
+        ratesList.appendChild(createRateRow());
+        return;
+      }
+      entries.forEach((entry) => ratesList.appendChild(createRateRow(entry)));
+    }
+
+    function collectRateRows() {
+      return Array.from(ratesList.querySelectorAll('.rate-row')).map((row) => ({
+        month: row.querySelector('.rate-month').value,
+        country: row.querySelector('.rate-country').value,
+        rate: row.querySelector('.rate-value').value,
+      }));
+    }
+
+    function setRatesStatus(message = '', type = '') {
+      ratesStatus.textContent = message;
+      ratesStatus.className = `rates-status${type ? ` ${type}` : ''}`;
+    }
+
+    async function loadExchangeRates() {
+      try {
+        const response = await fetch('/api/exchange-rates');
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || '获取汇率失败');
+        }
+        renderRateRows(payload.rates || []);
+        exchangeRatesLoaded = true;
+        setRatesStatus(payload.rates && payload.rates.length ? '已加载当前汇率配置' : '当前还没有维护汇率，请先填写后同步');
+      } catch (error) {
+        renderRateRows([]);
+        setRatesStatus(error.message, 'error');
+      }
+    }
+
+    async function saveExchangeRates() {
+      saveRatesBtn.disabled = true;
+      setRatesStatus('正在同步汇率...');
+      try {
+        const response = await fetch('/api/exchange-rates', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            rates: collectRateRows(),
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || '同步失败');
+        }
+        renderRateRows(payload.rates || []);
+        exchangeRatesLoaded = true;
+        setRatesStatus(`已同步 ${payload.rates ? payload.rates.length : 0} 条汇率配置`, 'success');
+      } catch (error) {
+        setRatesStatus(error.message, 'error');
+      } finally {
+        saveRatesBtn.disabled = false;
+      }
+    }
 
     function formatSize(size) {
       if (!size && size !== 0) return '-';
@@ -447,6 +573,19 @@
       renderSelectedPdfs(files);
     });
 
+    ratesToggleBtn.addEventListener('click', async () => {
+      ratesPanel.classList.toggle('hidden');
+      if (!ratesPanel.classList.contains('hidden') && !exchangeRatesLoaded) {
+        await loadExchangeRates();
+      }
+    });
+
+    addRateRowBtn.addEventListener('click', () => {
+      ratesList.appendChild(createRateRow());
+    });
+
+    saveRatesBtn.addEventListener('click', saveExchangeRates);
+
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
 
@@ -502,6 +641,7 @@
     });
 
     window.addEventListener('load', async () => {
+      await loadExchangeRates();
       const jobs = await refreshHistory();
       let savedJobId = loadSavedJobId();
       if (!savedJobId) {

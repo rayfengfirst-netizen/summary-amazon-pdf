@@ -126,14 +126,12 @@ DEFAULT_COUNTRY_CONFIGS = {
         'store_code': 'YR',
         'company': '苏州乐竹壹冉网络科技有限公司',
         'report_type': 'summary账单',
-        'exchange_rate': 7.023,
     },
     '加拿大': {
         'platform': 'AMZ',
         'store_code': 'YR',
         'company': '苏州乐竹壹冉网络科技有限公司',
         'report_type': 'summary账单',
-        'exchange_rate': 5.0945,
     },
 }
 EMBEDDED_TEMPLATE_ROWS = [
@@ -277,7 +275,56 @@ def load_amz_template_config():
         'field_mappings': field_mappings,
         'fallback_mappings': fallback_mappings,
         'country_defaults': DEFAULT_COUNTRY_CONFIGS,
+        'exchange_rates': {},
     }
+
+
+def normalize_rate_month(month_value):
+    if isinstance(month_value, datetime):
+        return month_value.strftime('%Y-%m')
+
+    month_text = str(month_value or '').strip()
+    if not month_text:
+        return ''
+
+    month_match = re.match(r'^(\d{4})-(\d{1,2})$', month_text)
+    if month_match:
+        year = int(month_match.group(1))
+        month = int(month_match.group(2))
+        if 1 <= month <= 12:
+            return f'{year:04d}-{month:02d}'
+
+    parsed = parse_month_start(month_text)
+    if parsed:
+        return parsed.strftime('%Y-%m')
+
+    return ''
+
+
+def build_exchange_rate_map(exchange_rate_entries=None):
+    exchange_rates = {}
+    for entry in exchange_rate_entries or []:
+        country = str((entry or {}).get('country') or '').strip()
+        month_key = normalize_rate_month((entry or {}).get('month'))
+        raw_rate = (entry or {}).get('rate')
+        if not country or not month_key or raw_rate in ('', None):
+            continue
+        try:
+            rate = float(raw_rate)
+        except (TypeError, ValueError):
+            continue
+        exchange_rates[(country, month_key)] = rate
+    return exchange_rates
+
+
+def get_exchange_rate(template_config, country, belong_month, source_file):
+    month_key = normalize_rate_month(belong_month)
+    exchange_rate = template_config.get('exchange_rates', {}).get((country, month_key))
+    if exchange_rate in ('', None):
+        raise ValueError(
+            f'{source_file}: 未找到 {country} {month_key} 的汇率配置，请先在页面的汇率维护中填写对应月份汇率。'
+        )
+    return float(exchange_rate)
 
 
 def get_mapping_for_item(template_config, country, category, field_name):
@@ -728,10 +775,10 @@ def process_pdf_to_rows(pdf_path, template_config):
     if not defaults:
         raise ValueError(f'{source_file}: 未找到国家 {country} 的默认配置。')
 
-    exchange_rate = defaults.get('exchange_rate', 0) or 0
     belong_month = get_belong_month(header_info, header_info['source_file'])
     if not belong_month:
         raise ValueError(f'{source_file}: 无法识别归属月份。')
+    exchange_rate = get_exchange_rate(template_config, country, belong_month, source_file)
 
     rows = []
     unmapped_items = []
@@ -794,7 +841,7 @@ def process_pdf_to_rows(pdf_path, template_config):
     }
 
 
-def process_pdf_folder(input_folder, output_file, progress_callback=None):
+def process_pdf_folder(input_folder, output_file, progress_callback=None, exchange_rate_entries=None):
     """批量处理文件夹中的 PDF，并输出 Excel。"""
     if not os.path.isdir(input_folder):
         raise ValueError(f"输入文件夹不存在: {input_folder}")
@@ -803,6 +850,7 @@ def process_pdf_folder(input_folder, output_file, progress_callback=None):
         output_file += '.xlsx'
 
     template_config = load_amz_template_config()
+    template_config['exchange_rates'] = build_exchange_rate_map(exchange_rate_entries)
     pdf_files = sorted(f for f in os.listdir(input_folder) if f.lower().endswith('.pdf'))
 
     if not pdf_files:

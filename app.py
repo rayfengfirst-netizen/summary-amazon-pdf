@@ -20,8 +20,10 @@ JOB_DIR = WORK_DIR / "jobs"
 UPLOAD_DIR = WORK_DIR / "uploads"
 EXTRACT_DIR = WORK_DIR / "extracted"
 OUTPUT_DIR = WORK_DIR / "outputs"
+EXCHANGE_RATE_FILE = WORK_DIR / "exchange_rates.json"
 ALLOWED_EXTENSIONS = {".zip", ".rar"}
 PDF_EXTENSION = ".pdf"
+SUPPORTED_RATE_COUNTRIES = {"美国", "加拿大"}
 
 
 app = Flask(__name__)
@@ -72,6 +74,71 @@ def list_jobs(limit=10):
             continue
     records.sort(key=lambda item: item.get("created_at", 0), reverse=True)
     return records[:limit]
+
+
+def read_exchange_rates():
+    if not EXCHANGE_RATE_FILE.exists():
+        return []
+    try:
+        payload = json.loads(EXCHANGE_RATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    entries = payload.get("rates", []) if isinstance(payload, dict) else payload
+    if not isinstance(entries, list):
+        return []
+    return entries
+
+
+def write_exchange_rates(entries):
+    payload = {
+        "updated_at": int(time.time()),
+        "rates": entries,
+    }
+    tmp_path = EXCHANGE_RATE_FILE.with_suffix(".json.tmp")
+    tmp_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    tmp_path.replace(EXCHANGE_RATE_FILE)
+
+
+def normalize_exchange_rate_entries(entries):
+    normalized = []
+    for entry in entries or []:
+        month = str((entry or {}).get("month") or "").strip()
+        country = str((entry or {}).get("country") or "").strip()
+        rate = str((entry or {}).get("rate") or "").strip()
+
+        if not month and not country and not rate:
+            continue
+        if not month or not country or not rate:
+            raise ValueError("汇率配置中的月份、站点、汇率都必须填写完整")
+        if country not in SUPPORTED_RATE_COUNTRIES:
+            raise ValueError(f"暂仅支持维护这些站点的汇率: {', '.join(sorted(SUPPORTED_RATE_COUNTRIES))}")
+        if len(month) != 7 or month[4] != "-":
+            raise ValueError("汇率月份格式必须为 YYYY-MM")
+        try:
+            month_year = int(month[:4])
+            month_no = int(month[5:])
+            rate_value = float(rate)
+        except ValueError as exc:
+            raise ValueError("汇率月份或汇率格式不正确") from exc
+        if month_year < 2000 or not 1 <= month_no <= 12:
+            raise ValueError("汇率月份格式必须为 YYYY-MM")
+        if rate_value <= 0:
+            raise ValueError("汇率必须大于 0")
+
+        normalized.append({
+            "month": f"{month_year:04d}-{month_no:02d}",
+            "country": country,
+            "rate": rate_value,
+        })
+
+    normalized.sort(key=lambda item: (item["month"], item["country"]))
+    deduped = {}
+    for item in normalized:
+        deduped[(item["month"], item["country"])] = item
+    return list(deduped.values())
 
 
 def update_job(job_id, **kwargs):
@@ -126,7 +193,7 @@ def find_pdf_root(extract_root):
     return extract_root
 
 
-def run_job(job_id, archive_path=None, pdf_root=None):
+def run_job(job_id, archive_path=None, pdf_root=None, exchange_rate_entries=None):
     extract_root = EXTRACT_DIR / job_id
     output_file = OUTPUT_DIR / f"{job_id}.xlsx"
 
@@ -191,7 +258,12 @@ def run_job(job_id, archive_path=None, pdf_root=None):
                     message="处理完成",
                 )
 
-        process_pdf_folder(str(pdf_root), str(output_file), progress_callback=on_progress)
+        process_pdf_folder(
+            str(pdf_root),
+            str(output_file),
+            progress_callback=on_progress,
+            exchange_rate_entries=exchange_rate_entries,
+        )
     except Exception as exc:
         append_job_error(job_id, "", "job", str(exc))
         current_job = read_job(job_id) or {}
@@ -207,6 +279,23 @@ def run_job(job_id, archive_path=None, pdf_root=None):
 @app.get("/")
 def index():
     return render_template("index.html")
+
+
+@app.get("/api/exchange-rates")
+def get_exchange_rates():
+    return jsonify({"rates": read_exchange_rates()})
+
+
+@app.post("/api/exchange-rates")
+def save_exchange_rates():
+    payload = request.get_json(silent=True) or {}
+    try:
+        entries = normalize_exchange_rate_entries(payload.get("rates", []))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    write_exchange_rates(entries)
+    return jsonify({"rates": entries})
 
 
 @app.post("/api/jobs")
@@ -226,6 +315,10 @@ def create_job():
     archive_path = None
     pdf_input_dir = None
     display_filename = ""
+    exchange_rate_entries = read_exchange_rates()
+
+    if not exchange_rate_entries:
+        return jsonify({"error": "请先在页面的汇率维护中填写至少一条汇率配置"}), 400
 
     if has_archive:
         if not allowed_file(upload.filename):
@@ -273,6 +366,7 @@ def create_job():
         "errors": [],
         "skipped": [],
         "download_url": "",
+        "exchange_rates": exchange_rate_entries,
     }
     with jobs_lock:
         jobs[job_id] = job
@@ -284,6 +378,7 @@ def create_job():
             "job_id": job_id,
             "archive_path": archive_path,
             "pdf_root": str(pdf_input_dir) if pdf_input_dir else None,
+            "exchange_rate_entries": exchange_rate_entries,
         },
         daemon=True,
     )
