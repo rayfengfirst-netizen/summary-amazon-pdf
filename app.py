@@ -21,10 +21,10 @@ UPLOAD_DIR = WORK_DIR / "uploads"
 EXTRACT_DIR = WORK_DIR / "extracted"
 OUTPUT_DIR = WORK_DIR / "outputs"
 ALLOWED_EXTENSIONS = {".zip", ".rar"}
+PDF_EXTENSION = ".pdf"
 
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 
 for folder in (WORK_DIR, JOB_DIR, UPLOAD_DIR, EXTRACT_DIR, OUTPUT_DIR):
     folder.mkdir(parents=True, exist_ok=True)
@@ -35,6 +35,10 @@ jobs_lock = threading.Lock()
 
 def allowed_file(filename):
     return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
+
+
+def allowed_pdf_file(filename):
+    return Path(filename).suffix.lower() == PDF_EXTENSION
 
 
 def job_file_path(job_id):
@@ -122,15 +126,20 @@ def find_pdf_root(extract_root):
     return extract_root
 
 
-def run_job(job_id, archive_path):
+def run_job(job_id, archive_path=None, pdf_root=None):
     extract_root = EXTRACT_DIR / job_id
     output_file = OUTPUT_DIR / f"{job_id}.xlsx"
 
     try:
-        update_job(job_id, stage="extracting", message="正在解压压缩包")
-        extract_archive(archive_path, extract_root)
+        if archive_path:
+            update_job(job_id, stage="extracting", message="正在解压压缩包")
+            extract_archive(archive_path, extract_root)
+            pdf_root = find_pdf_root(extract_root)
+        else:
+            if not pdf_root or not Path(pdf_root).exists():
+                raise ValueError("未找到可处理的 PDF 文件")
+            update_job(job_id, stage="processing", message="正在解析 PDF")
 
-        pdf_root = find_pdf_root(extract_root)
         update_job(job_id, stage="processing", message="正在解析 PDF")
 
         def on_progress(payload):
@@ -203,23 +212,56 @@ def index():
 @app.post("/api/jobs")
 def create_job():
     upload = request.files.get("archive")
-    if not upload or not upload.filename:
-        return jsonify({"error": "请先选择 zip 或 rar 压缩包"}), 400
+    pdf_uploads = [file for file in request.files.getlist("pdf_files") if file and file.filename]
+    has_archive = bool(upload and upload.filename)
+    has_pdfs = bool(pdf_uploads)
 
-    if not allowed_file(upload.filename):
-        return jsonify({"error": "仅支持 zip 或 rar 压缩包"}), 400
+    if not has_archive and not has_pdfs:
+        return jsonify({"error": "请先选择 zip/rar 压缩包，或直接选择多个 PDF 文件"}), 400
+
+    if has_archive and has_pdfs:
+        return jsonify({"error": "压缩包上传和多 PDF 上传请二选一"}), 400
 
     job_id = uuid.uuid4().hex
-    ext = Path(upload.filename).suffix.lower()
-    filename = secure_filename(Path(upload.filename).stem) or f"upload_{job_id}"
-    archive_path = UPLOAD_DIR / f"{job_id}_{filename}{ext}"
-    upload.save(archive_path)
+    archive_path = None
+    pdf_input_dir = None
+    display_filename = ""
+
+    if has_archive:
+        if not allowed_file(upload.filename):
+            return jsonify({"error": "压缩包仅支持 zip 或 rar"}), 400
+        ext = Path(upload.filename).suffix.lower()
+        filename = secure_filename(Path(upload.filename).stem) or f"upload_{job_id}"
+        archive_path = UPLOAD_DIR / f"{job_id}_{filename}{ext}"
+        upload.save(archive_path)
+        display_filename = upload.filename
+        source_type = "archive"
+    else:
+        invalid_files = [file.filename for file in pdf_uploads if not allowed_pdf_file(file.filename)]
+        if invalid_files:
+            return jsonify({"error": f"以下文件不是 PDF: {', '.join(invalid_files[:5])}"}), 400
+
+        pdf_input_dir = EXTRACT_DIR / job_id / "direct_upload"
+        pdf_input_dir.mkdir(parents=True, exist_ok=True)
+        seen_names = set()
+        for index, file in enumerate(pdf_uploads, 1):
+            original_name = Path(file.filename).name
+            safe_name = secure_filename(Path(original_name).stem) or f"pdf_{index}"
+            final_name = f"{safe_name}.pdf"
+            while final_name in seen_names:
+                final_name = f"{safe_name}_{index}.pdf"
+            seen_names.add(final_name)
+            file.save(pdf_input_dir / final_name)
+
+        display_filename = f"已选择 {len(pdf_uploads)} 个 PDF 文件"
+        source_type = "pdf_files"
 
     job = {
         "job_id": job_id,
         "stage": "queued",
         "message": "任务已创建，等待开始",
-        "filename": upload.filename,
+        "filename": display_filename,
+        "source_type": source_type,
         "created_at": int(time.time()),
         "total_files": 0,
         "processed_files": 0,
@@ -236,7 +278,15 @@ def create_job():
         jobs[job_id] = job
         write_job(job)
 
-    thread = threading.Thread(target=run_job, args=(job_id, archive_path), daemon=True)
+    thread = threading.Thread(
+        target=run_job,
+        kwargs={
+            "job_id": job_id,
+            "archive_path": archive_path,
+            "pdf_root": str(pdf_input_dir) if pdf_input_dir else None,
+        },
+        daemon=True,
+    )
     thread.start()
 
     return jsonify({"job_id": job_id})

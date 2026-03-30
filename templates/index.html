@@ -19,15 +19,29 @@
 
     <section class="panel">
       <form id="upload-form" class="upload-form">
-        <label id="upload-box" class="upload-box" for="archive">
-          <input id="archive" name="archive" type="file" accept=".zip,.rar" required>
-          <span id="upload-title" class="upload-title">选择压缩包</span>
-          <span id="upload-subtitle" class="upload-subtitle">支持 zip / rar，建议把所有 PDF 放在同一个压缩包里</span>
-        </label>
+        <div class="upload-grid">
+          <label id="upload-box" class="upload-box" for="archive">
+            <input id="archive" name="archive" type="file" accept=".zip,.rar">
+            <span id="upload-title" class="upload-title">选择压缩包</span>
+            <span id="upload-subtitle" class="upload-subtitle">支持 zip / rar，建议把所有 PDF 放在同一个压缩包里</span>
+          </label>
+
+          <label id="pdf-upload-box" class="upload-box" for="pdf-files">
+            <input id="pdf-files" name="pdf_files" type="file" accept=".pdf" multiple>
+            <span id="pdf-upload-title" class="upload-title">直接选择多个 PDF</span>
+            <span id="pdf-upload-subtitle" class="upload-subtitle">支持一次选择多个 PDF 文件，无需先压缩</span>
+          </label>
+        </div>
+
         <div id="selected-file" class="selected-file hidden">
-          <span>已选择文件</span>
+          <span>已选择压缩包</span>
           <strong id="selected-file-name">-</strong>
           <small id="selected-file-meta">-</small>
+        </div>
+        <div id="selected-pdfs" class="selected-file hidden">
+          <span>已选择 PDF 文件</span>
+          <strong id="selected-pdfs-name">-</strong>
+          <small id="selected-pdfs-meta">-</small>
         </div>
         <button id="submit-btn" class="submit-btn" type="submit">开始解析</button>
       </form>
@@ -122,13 +136,20 @@
   <script>
     const form = document.getElementById('upload-form');
     const archiveInput = document.getElementById('archive');
+    const pdfFilesInput = document.getElementById('pdf-files');
     const uploadBox = document.getElementById('upload-box');
     const uploadTitle = document.getElementById('upload-title');
     const uploadSubtitle = document.getElementById('upload-subtitle');
+    const pdfUploadBox = document.getElementById('pdf-upload-box');
+    const pdfUploadTitle = document.getElementById('pdf-upload-title');
+    const pdfUploadSubtitle = document.getElementById('pdf-upload-subtitle');
     const submitBtn = document.getElementById('submit-btn');
     const selectedFile = document.getElementById('selected-file');
     const selectedFileName = document.getElementById('selected-file-name');
     const selectedFileMeta = document.getElementById('selected-file-meta');
+    const selectedPdfs = document.getElementById('selected-pdfs');
+    const selectedPdfsName = document.getElementById('selected-pdfs-name');
+    const selectedPdfsMeta = document.getElementById('selected-pdfs-meta');
     const statusPanel = document.getElementById('status-panel');
     const errorsPanel = document.getElementById('errors-panel');
     const statusTitle = document.getElementById('status-title');
@@ -175,6 +196,24 @@
       uploadSubtitle.textContent = '确认无误后点击下方“开始解析”即可上传处理';
       selectedFileName.textContent = file.name;
       selectedFileMeta.textContent = `${formatSize(file.size)} · ${file.type || 'archive file'}`;
+    }
+
+    function renderSelectedPdfs(files) {
+      if (!files || files.length === 0) {
+        selectedPdfs.classList.add('hidden');
+        pdfUploadBox.classList.remove('has-file');
+        pdfUploadTitle.textContent = '直接选择多个 PDF';
+        pdfUploadSubtitle.textContent = '支持一次选择多个 PDF 文件，无需先压缩';
+        return;
+      }
+
+      const totalSize = files.reduce((sum, file) => sum + (file.size || 0), 0);
+      selectedPdfs.classList.remove('hidden');
+      pdfUploadBox.classList.add('has-file');
+      pdfUploadTitle.textContent = 'PDF 文件已选中';
+      pdfUploadSubtitle.textContent = '确认无误后点击下方“开始解析”即可上传处理';
+      selectedPdfsName.textContent = `共 ${files.length} 个 PDF 文件`;
+      selectedPdfsMeta.textContent = `${formatSize(totalSize)} · ${files.slice(0, 3).map(file => file.name).join('，')}${files.length > 3 ? ' 等' : ''}`;
     }
 
     function saveCurrentJobId(jobId) {
@@ -392,14 +431,27 @@
 
     archiveInput.addEventListener('change', () => {
       const file = archiveInput.files && archiveInput.files[0];
+      if (file) {
+        pdfFilesInput.value = '';
+        renderSelectedPdfs([]);
+      }
       renderSelectedFile(file || null);
+    });
+
+    pdfFilesInput.addEventListener('change', () => {
+      const files = Array.from(pdfFilesInput.files || []);
+      if (files.length > 0) {
+        archiveInput.value = '';
+        renderSelectedFile(null);
+      }
+      renderSelectedPdfs(files);
     });
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
 
-      if (!archiveInput.files.length) {
-        alert('请先选择压缩包');
+      if (!archiveInput.files.length && !(pdfFilesInput.files && pdfFilesInput.files.length)) {
+        alert('请先选择 zip/rar 压缩包，或直接选择多个 PDF 文件');
         return;
       }
 
@@ -421,7 +473,13 @@
       });
 
       const formData = new FormData();
-      formData.append('archive', archiveInput.files[0]);
+      if (archiveInput.files.length) {
+        formData.append('archive', archiveInput.files[0]);
+      } else {
+        Array.from(pdfFilesInput.files || []).forEach((file) => {
+          formData.append('pdf_files', file);
+        });
+      }
 
       try {
         const response = await fetch('/api/jobs', {

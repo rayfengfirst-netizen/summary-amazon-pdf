@@ -83,6 +83,12 @@ h2 {
   gap: 18px;
 }
 
+.upload-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
 .upload-box {
   display: grid;
   place-items: center;
@@ -382,6 +388,10 @@ code {
 @media (max-width: 860px) {
   .stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .upload-grid {
+    grid-template-columns: 1fr;
   }
 }
 
