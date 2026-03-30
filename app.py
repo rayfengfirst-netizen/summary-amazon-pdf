@@ -1,0 +1,223 @@
+import os
+import shutil
+import subprocess
+import threading
+import time
+import uuid
+import zipfile
+from pathlib import Path
+
+from flask import Flask, jsonify, render_template, request, send_file
+from werkzeug.utils import secure_filename
+
+from pdf_parser_cli import process_pdf_folder
+
+
+BASE_DIR = Path(__file__).resolve().parent
+WORK_DIR = BASE_DIR / "web_jobs"
+UPLOAD_DIR = WORK_DIR / "uploads"
+EXTRACT_DIR = WORK_DIR / "extracted"
+OUTPUT_DIR = WORK_DIR / "outputs"
+ALLOWED_EXTENSIONS = {".zip", ".rar"}
+
+
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
+
+for folder in (WORK_DIR, UPLOAD_DIR, EXTRACT_DIR, OUTPUT_DIR):
+    folder.mkdir(parents=True, exist_ok=True)
+
+jobs = {}
+jobs_lock = threading.Lock()
+
+
+def allowed_file(filename):
+    return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
+
+
+def update_job(job_id, **kwargs):
+    with jobs_lock:
+        job = jobs[job_id]
+        job.update(kwargs)
+
+
+def append_job_error(job_id, filename, stage, reason):
+    with jobs_lock:
+        job = jobs[job_id]
+        job.setdefault("errors", []).append({
+            "文件名": filename,
+            "阶段": stage,
+            "原因": reason,
+        })
+
+
+def extract_archive(archive_path, destination_dir):
+    suffix = archive_path.suffix.lower()
+    if suffix == ".zip":
+        with zipfile.ZipFile(archive_path) as archive:
+            archive.extractall(destination_dir)
+        return
+
+    if suffix == ".rar":
+        result = subprocess.run(
+            ["bsdtar", "-xf", str(archive_path), "-C", str(destination_dir)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            raise ValueError(f"RAR 解压失败: {stderr or 'bsdtar returned non-zero exit status'}")
+        return
+
+    raise ValueError("仅支持 zip 或 rar 压缩包")
+
+
+def find_pdf_root(extract_root):
+    pdf_files = list(extract_root.rglob("*.pdf"))
+    if not pdf_files:
+        raise ValueError("压缩包中没有找到 PDF 文件")
+
+    root_candidates = {pdf.parent for pdf in pdf_files}
+    if len(root_candidates) == 1:
+        return next(iter(root_candidates))
+    return extract_root
+
+
+def run_job(job_id, archive_path):
+    extract_root = EXTRACT_DIR / job_id
+    output_file = OUTPUT_DIR / f"{job_id}.xlsx"
+
+    try:
+        update_job(job_id, stage="extracting", message="正在解压压缩包")
+        extract_archive(archive_path, extract_root)
+
+        pdf_root = find_pdf_root(extract_root)
+        update_job(job_id, stage="processing", message="正在解析 PDF")
+
+        def on_progress(payload):
+            stage = payload.get("stage")
+            if stage == "starting":
+                update_job(
+                    job_id,
+                    stage="processing",
+                    total_files=payload.get("total_files", 0),
+                    processed_files=payload.get("processed_files", 0),
+                    success_count=payload.get("success_count", 0),
+                    failure_count=payload.get("failure_count", 0),
+                    current_file="",
+                    message="开始解析 PDF",
+                )
+            elif stage == "processing":
+                last_result = payload.get("last_result", {})
+                update_job(
+                    job_id,
+                    stage="processing",
+                    total_files=payload.get("total_files", 0),
+                    processed_files=payload.get("processed_files", 0),
+                    success_count=payload.get("success_count", 0),
+                    failure_count=payload.get("failure_count", 0),
+                    current_file=payload.get("current_file", ""),
+                    last_result=last_result,
+                    errors=payload.get("errors", []),
+                    message=f"正在处理 {payload.get('current_file', '')}",
+                )
+            elif stage == "completed":
+                update_job(
+                    job_id,
+                    stage="completed",
+                    total_files=payload.get("total_files", 0),
+                    processed_files=payload.get("total_files", 0),
+                    success_count=payload.get("success_count", 0),
+                    failure_count=payload.get("failure_count", 0),
+                    total_rows=payload.get("total_rows", 0),
+                    current_file="",
+                    errors=payload.get("errors", []),
+                    output_file=str(output_file),
+                    download_url=f"/api/jobs/{job_id}/download",
+                    message="处理完成",
+                )
+
+        process_pdf_folder(str(pdf_root), str(output_file), progress_callback=on_progress)
+    except Exception as exc:
+        append_job_error(job_id, "", "job", str(exc))
+        update_job(
+            job_id,
+            stage="failed",
+            message=str(exc),
+            current_file="",
+            failure_count=jobs[job_id].get("failure_count", 0) or 1,
+        )
+
+
+@app.get("/")
+def index():
+    return render_template("index.html")
+
+
+@app.post("/api/jobs")
+def create_job():
+    upload = request.files.get("archive")
+    if not upload or not upload.filename:
+        return jsonify({"error": "请先选择 zip 或 rar 压缩包"}), 400
+
+    if not allowed_file(upload.filename):
+        return jsonify({"error": "仅支持 zip 或 rar 压缩包"}), 400
+
+    job_id = uuid.uuid4().hex
+    ext = Path(upload.filename).suffix.lower()
+    filename = secure_filename(Path(upload.filename).stem) or f"upload_{job_id}"
+    archive_path = UPLOAD_DIR / f"{job_id}_{filename}{ext}"
+    upload.save(archive_path)
+
+    with jobs_lock:
+        jobs[job_id] = {
+            "job_id": job_id,
+            "stage": "queued",
+            "message": "任务已创建，等待开始",
+            "filename": upload.filename,
+            "created_at": int(time.time()),
+            "total_files": 0,
+            "processed_files": 0,
+            "success_count": 0,
+            "failure_count": 0,
+            "total_rows": 0,
+            "current_file": "",
+            "errors": [],
+            "download_url": "",
+        }
+
+    thread = threading.Thread(target=run_job, args=(job_id, archive_path), daemon=True)
+    thread.start()
+
+    return jsonify({"job_id": job_id})
+
+
+@app.get("/api/jobs/<job_id>")
+def get_job(job_id):
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            return jsonify({"error": "任务不存在"}), 404
+        return jsonify(job)
+
+
+@app.get("/api/jobs/<job_id>/download")
+def download_job_output(job_id):
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            return jsonify({"error": "任务不存在"}), 404
+        output_file = job.get("output_file")
+        if job.get("stage") != "completed" or not output_file or not os.path.exists(output_file):
+            return jsonify({"error": "文件尚未生成"}), 400
+
+    return send_file(
+        output_file,
+        as_attachment=True,
+        download_name=f"amazon_summary_{job_id}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=5001)

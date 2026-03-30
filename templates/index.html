@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Amazon Summary 解析</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <p class="eyebrow">Amazon Seller Central</p>
+      <h1>Summary 压缩包一键解析</h1>
+      <p class="intro">上传一个包含全部 PDF 的 <code>zip</code> 或 <code>rar</code> 压缩包，系统会自动解压、解析、生成 Excel，并在页面上展示处理进度和失败明细。</p>
+    </section>
+
+    <section class="panel">
+      <form id="upload-form" class="upload-form">
+        <label class="upload-box" for="archive">
+          <input id="archive" name="archive" type="file" accept=".zip,.rar" required>
+          <span class="upload-title">选择压缩包</span>
+          <span class="upload-subtitle">支持 zip / rar，建议把所有 PDF 放在同一个压缩包里</span>
+        </label>
+        <button id="submit-btn" class="submit-btn" type="submit">开始解析</button>
+      </form>
+    </section>
+
+    <section id="status-panel" class="panel hidden">
+      <div class="status-header">
+        <div>
+          <p class="eyebrow">处理进度</p>
+          <h2 id="status-title">等待开始</h2>
+          <p id="status-message" class="status-message"></p>
+        </div>
+        <div id="badge" class="badge">待处理</div>
+      </div>
+
+      <div class="progress-wrap">
+        <div class="progress-track">
+          <div id="progress-bar" class="progress-bar"></div>
+        </div>
+        <div id="progress-text" class="progress-text">0 / 0</div>
+      </div>
+
+      <div class="stats-grid">
+        <article class="stat-card">
+          <span>总文件数</span>
+          <strong id="total-files">0</strong>
+        </article>
+        <article class="stat-card">
+          <span>成功文件数</span>
+          <strong id="success-count">0</strong>
+        </article>
+        <article class="stat-card">
+          <span>失败文件数</span>
+          <strong id="failure-count">0</strong>
+        </article>
+        <article class="stat-card">
+          <span>输出数据行</span>
+          <strong id="total-rows">0</strong>
+        </article>
+      </div>
+
+      <div class="current-file-box">
+        <span>当前文件</span>
+        <strong id="current-file">-</strong>
+      </div>
+
+      <div id="download-wrap" class="download-wrap hidden">
+        <a id="download-link" class="download-btn" href="#">下载 Excel</a>
+      </div>
+    </section>
+
+    <section id="errors-panel" class="panel hidden">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">失败详情</p>
+          <h2>错误列表</h2>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>文件名</th>
+              <th>阶段</th>
+              <th>原因</th>
+            </tr>
+          </thead>
+          <tbody id="errors-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById('upload-form');
+    const archiveInput = document.getElementById('archive');
+    const submitBtn = document.getElementById('submit-btn');
+    const statusPanel = document.getElementById('status-panel');
+    const errorsPanel = document.getElementById('errors-panel');
+    const statusTitle = document.getElementById('status-title');
+    const statusMessage = document.getElementById('status-message');
+    const badge = document.getElementById('badge');
+    const progressBar = document.getElementById('progress-bar');
+    const progressText = document.getElementById('progress-text');
+    const totalFiles = document.getElementById('total-files');
+    const successCount = document.getElementById('success-count');
+    const failureCount = document.getElementById('failure-count');
+    const totalRows = document.getElementById('total-rows');
+    const currentFile = document.getElementById('current-file');
+    const errorsBody = document.getElementById('errors-body');
+    const downloadWrap = document.getElementById('download-wrap');
+    const downloadLink = document.getElementById('download-link');
+
+    let timer = null;
+
+    function setBadge(stage) {
+      const stageMap = {
+        queued: ['待处理', 'queued'],
+        extracting: ['解压中', 'extracting'],
+        processing: ['解析中', 'processing'],
+        completed: ['已完成', 'completed'],
+        failed: ['失败', 'failed'],
+      };
+      const [text, cls] = stageMap[stage] || ['处理中', 'processing'];
+      badge.textContent = text;
+      badge.className = `badge ${cls}`;
+    }
+
+    function renderErrors(errors) {
+      if (!errors || errors.length === 0) {
+        errorsPanel.classList.add('hidden');
+        errorsBody.innerHTML = '';
+        return;
+      }
+
+      errorsPanel.classList.remove('hidden');
+      errorsBody.innerHTML = errors.map(item => `
+        <tr>
+          <td>${item['文件名'] || '-'}</td>
+          <td>${item['阶段'] || '-'}</td>
+          <td>${item['原因'] || '-'}</td>
+        </tr>
+      `).join('');
+    }
+
+    function renderJob(job) {
+      statusPanel.classList.remove('hidden');
+      statusTitle.textContent = {
+        queued: '任务已创建',
+        extracting: '正在解压压缩包',
+        processing: '正在解析 PDF',
+        completed: '解析完成',
+        failed: '任务失败',
+      }[job.stage] || '处理中';
+      statusMessage.textContent = job.message || '';
+      setBadge(job.stage);
+
+      const processed = job.processed_files || 0;
+      const total = job.total_files || 0;
+      const percent = total > 0 ? Math.round((processed / total) * 100) : (job.stage === 'completed' ? 100 : 0);
+      progressBar.style.width = `${percent}%`;
+      progressText.textContent = `${processed} / ${total}`;
+      totalFiles.textContent = total;
+      successCount.textContent = job.success_count || 0;
+      failureCount.textContent = job.failure_count || 0;
+      totalRows.textContent = job.total_rows || 0;
+      currentFile.textContent = job.current_file || '-';
+
+      renderErrors(job.errors || []);
+
+      if (job.stage === 'completed' && job.download_url) {
+        downloadWrap.classList.remove('hidden');
+        downloadLink.href = job.download_url;
+      } else {
+        downloadWrap.classList.add('hidden');
+      }
+    }
+
+    async function pollJob(jobId) {
+      if (timer) {
+        clearTimeout(timer);
+      }
+
+      try {
+        const response = await fetch(`/api/jobs/${jobId}`);
+        const job = await response.json();
+        if (!response.ok) {
+          throw new Error(job.error || '获取任务状态失败');
+        }
+
+        renderJob(job);
+
+        if (job.stage !== 'completed' && job.stage !== 'failed') {
+          timer = setTimeout(() => pollJob(jobId), 1000);
+        } else {
+          submitBtn.disabled = false;
+        }
+      } catch (error) {
+        statusPanel.classList.remove('hidden');
+        statusTitle.textContent = '状态获取失败';
+        statusMessage.textContent = error.message;
+        setBadge('failed');
+        submitBtn.disabled = false;
+      }
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      if (!archiveInput.files.length) {
+        alert('请先选择压缩包');
+        return;
+      }
+
+      submitBtn.disabled = true;
+      downloadWrap.classList.add('hidden');
+      errorsPanel.classList.add('hidden');
+      errorsBody.innerHTML = '';
+      renderJob({
+        stage: 'queued',
+        message: '文件上传中',
+        total_files: 0,
+        processed_files: 0,
+        success_count: 0,
+        failure_count: 0,
+        total_rows: 0,
+        current_file: '',
+        errors: [],
+      });
+
+      const formData = new FormData();
+      formData.append('archive', archiveInput.files[0]);
+
+      try {
+        const response = await fetch('/api/jobs', {
+          method: 'POST',
+          body: formData,
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || '上传失败');
+        }
+        pollJob(payload.job_id);
+      } catch (error) {
+        submitBtn.disabled = false;
+        statusTitle.textContent = '上传失败';
+        statusMessage.textContent = error.message;
+        setBadge('failed');
+      }
+    });
+  </script>
+</body>
+</html>
