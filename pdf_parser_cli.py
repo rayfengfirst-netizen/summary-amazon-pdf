@@ -726,6 +726,7 @@ def process_pdf_to_rows(pdf_path, template_config):
 
     rows = []
     unmapped_items = []
+    ignored_zero_unmapped_items = []
 
     for item in financial_data:
         if item['level'] != 2:
@@ -740,13 +741,16 @@ def process_pdf_to_rows(pdf_path, template_config):
             continue
 
         category = normalize_category_name(item['category'])
+        amount = get_original_amount(item)
         mapping = get_mapping_for_item(template_config, country, category, field_name)
 
         if not mapping:
+            if amount == 0:
+                ignored_zero_unmapped_items.append((category, field_name))
+                continue
             unmapped_items.append((category, field_name))
             continue
 
-        amount = get_original_amount(item)
         converted_amount = round(amount * exchange_rate, 6) if exchange_rate else 0
 
         row = {
@@ -777,6 +781,7 @@ def process_pdf_to_rows(pdf_path, template_config):
         'legal_name': header_info['legal_name'],
         'time': header_info['time'],
         'unmapped_items': unmapped_items,
+        'ignored_zero_unmapped_items': ignored_zero_unmapped_items,
     }
 
 
