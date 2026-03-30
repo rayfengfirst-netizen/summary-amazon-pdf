@@ -143,8 +143,10 @@ def run_job(job_id, archive_path):
                     processed_files=payload.get("processed_files", 0),
                     success_count=payload.get("success_count", 0),
                     failure_count=payload.get("failure_count", 0),
+                    skipped_count=payload.get("skipped_count", 0),
                     current_file="",
                     message="开始解析 PDF",
+                    skipped=payload.get("skipped", []),
                 )
             elif stage == "processing":
                 last_result = payload.get("last_result", {})
@@ -155,9 +157,11 @@ def run_job(job_id, archive_path):
                     processed_files=payload.get("processed_files", 0),
                     success_count=payload.get("success_count", 0),
                     failure_count=payload.get("failure_count", 0),
+                    skipped_count=payload.get("skipped_count", 0),
                     current_file=payload.get("current_file", ""),
                     last_result=last_result,
                     errors=payload.get("errors", []),
+                    skipped=payload.get("skipped", []),
                     message=f"正在处理 {payload.get('current_file', '')}",
                 )
             elif stage == "completed":
@@ -168,9 +172,11 @@ def run_job(job_id, archive_path):
                     processed_files=payload.get("total_files", 0),
                     success_count=payload.get("success_count", 0),
                     failure_count=payload.get("failure_count", 0),
+                    skipped_count=payload.get("skipped_count", 0),
                     total_rows=payload.get("total_rows", 0),
                     current_file="",
                     errors=payload.get("errors", []),
+                    skipped=payload.get("skipped", []),
                     output_file=str(output_file),
                     download_url=f"/api/jobs/{job_id}/download",
                     message="处理完成",
@@ -219,9 +225,11 @@ def create_job():
         "processed_files": 0,
         "success_count": 0,
         "failure_count": 0,
+        "skipped_count": 0,
         "total_rows": 0,
         "current_file": "",
         "errors": [],
+        "skipped": [],
         "download_url": "",
     }
     with jobs_lock:

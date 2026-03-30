@@ -38,6 +38,10 @@ ERROR_COLUMNS = [
     '阶段',
     '原因',
 ]
+SKIPPED_COLUMNS = [
+    '文件名',
+    '原因',
+]
 HEADER_MAX_Y = 100
 BODY_TOP_Y = 100
 BODY_BOTTOM_Y = 560
@@ -225,6 +229,11 @@ def normalize_category_name(category):
 
 def normalize_field_name(field_name):
     return re.sub(r'\s+', ' ', str(field_name or '').strip())
+
+
+def detect_station_code_from_filename(filename):
+    match = re.search(r'_([A-Z]{2})_\d+\.pdf$', str(filename))
+    return match.group(1) if match else ''
 
 
 def is_noise_field(text):
@@ -801,6 +810,7 @@ def process_pdf_folder(input_folder, output_file, progress_callback=None):
 
     all_rows = []
     error_rows = []
+    skipped_rows = []
     success_count = 0
 
     if progress_callback:
@@ -810,12 +820,40 @@ def process_pdf_folder(input_folder, output_file, progress_callback=None):
             'processed_files': 0,
             'success_count': 0,
             'failure_count': 0,
+            'skipped_count': 0,
             'current_file': '',
             'errors': [],
+            'skipped': [],
         })
 
     for i, pdf_file in enumerate(pdf_files, 1):
         pdf_path = os.path.join(input_folder, pdf_file)
+        station_code = detect_station_code_from_filename(pdf_file)
+        if station_code in {'MX', 'BR'}:
+            status = {
+                'index': i,
+                'file': pdf_file,
+                'status': 'skipped',
+                'reason': f'{station_code} 站点数据不在当前统计范围内，已跳过',
+            }
+            skipped_rows.append({
+                '文件名': pdf_file,
+                '原因': status['reason'],
+            })
+            if progress_callback:
+                progress_callback({
+                    'stage': 'processing',
+                    'total_files': len(pdf_files),
+                    'processed_files': i,
+                    'success_count': success_count,
+                    'failure_count': len(error_rows),
+                    'skipped_count': len(skipped_rows),
+                    'current_file': pdf_file,
+                    'last_result': status,
+                    'errors': error_rows[-20:],
+                    'skipped': skipped_rows[-20:],
+                })
+            continue
         try:
             rows, metadata = process_pdf_to_rows(pdf_path, template_config)
             all_rows.extend(rows)
@@ -851,18 +889,23 @@ def process_pdf_folder(input_folder, output_file, progress_callback=None):
                 'processed_files': i,
                 'success_count': success_count,
                 'failure_count': len(error_rows),
+                'skipped_count': len(skipped_rows),
                 'current_file': pdf_file,
                 'last_result': status,
                 'errors': error_rows[-20:],
+                'skipped': skipped_rows[-20:],
             })
 
     if all_rows or error_rows:
         df = pd.DataFrame(all_rows).reindex(columns=OUTPUT_COLUMNS)
         error_df = pd.DataFrame(error_rows).reindex(columns=ERROR_COLUMNS)
+        skipped_df = pd.DataFrame(skipped_rows).reindex(columns=SKIPPED_COLUMNS)
         with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='AMZ')
             if not error_df.empty:
                 error_df.to_excel(writer, index=False, sheet_name='Errors')
+            if not skipped_df.empty:
+                skipped_df.to_excel(writer, index=False, sheet_name='Skipped')
     else:
         raise ValueError("没有成功解析任何PDF文件")
 
@@ -870,9 +913,11 @@ def process_pdf_folder(input_folder, output_file, progress_callback=None):
         'total_files': len(pdf_files),
         'success_count': success_count,
         'failure_count': len(error_rows),
+        'skipped_count': len(skipped_rows),
         'total_rows': len(all_rows),
         'output_file': output_file,
         'errors': error_rows,
+        'skipped': skipped_rows,
     }
 
     if progress_callback:

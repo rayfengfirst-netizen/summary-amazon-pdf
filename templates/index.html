@@ -64,9 +64,17 @@
           <strong id="failure-count">0</strong>
         </article>
         <article class="stat-card">
+          <span>已跳过文件数</span>
+          <strong id="skipped-count">0</strong>
+        </article>
+        <article class="stat-card">
           <span>输出数据行</span>
           <strong id="total-rows">0</strong>
         </article>
+      </div>
+
+      <div class="scope-note">
+        `MX` 和 `BR` 站点数据不在当前统计范围内，系统会自动跳过，不计入失败。
       </div>
 
       <div class="current-file-box">
@@ -131,6 +139,7 @@
     const totalFiles = document.getElementById('total-files');
     const successCount = document.getElementById('success-count');
     const failureCount = document.getElementById('failure-count');
+    const skippedCount = document.getElementById('skipped-count');
     const totalRows = document.getElementById('total-rows');
     const currentFile = document.getElementById('current-file');
     const errorsBody = document.getElementById('errors-body');
@@ -269,6 +278,7 @@
               <span>状态：${job.stage || '-'}</span>
               <span>成功：${job.success_count || 0}</span>
               <span>失败：${job.failure_count || 0}</span>
+              <span>跳过：${job.skipped_count || 0}</span>
             </div>
           </button>
         `;
@@ -286,6 +296,7 @@
             processed_files: 0,
             success_count: 0,
             failure_count: 0,
+            skipped_count: 0,
             total_rows: 0,
             current_file: '',
             errors: [],
@@ -330,6 +341,7 @@
       totalFiles.textContent = total;
       successCount.textContent = job.success_count || 0;
       failureCount.textContent = job.failure_count || 0;
+      skippedCount.textContent = job.skipped_count || 0;
       totalRows.textContent = job.total_rows || 0;
       currentFile.textContent = job.current_file || '-';
 
@@ -402,6 +414,7 @@
         processed_files: 0,
         success_count: 0,
         failure_count: 0,
+        skipped_count: 0,
         total_rows: 0,
         current_file: '',
         errors: [],
@@ -451,6 +464,7 @@
         processed_files: 0,
         success_count: 0,
         failure_count: 0,
+        skipped_count: 0,
         total_rows: 0,
         current_file: '',
         errors: [],

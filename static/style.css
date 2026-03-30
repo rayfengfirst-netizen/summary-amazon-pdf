@@ -273,6 +273,16 @@ h2 {
   margin-top: 14px;
 }
 
+.scope-note {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(29, 107, 99, 0.14);
+  background: rgba(29, 107, 99, 0.08);
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .download-wrap {
   margin-top: 22px;
 }
