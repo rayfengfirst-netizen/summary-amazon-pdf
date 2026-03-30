@@ -1,4 +1,5 @@
 import os
+import json
 import shutil
 import subprocess
 import threading
@@ -15,6 +16,7 @@ from pdf_parser_cli import process_pdf_folder
 
 BASE_DIR = Path(__file__).resolve().parent
 WORK_DIR = BASE_DIR / "web_jobs"
+JOB_DIR = WORK_DIR / "jobs"
 UPLOAD_DIR = WORK_DIR / "uploads"
 EXTRACT_DIR = WORK_DIR / "extracted"
 OUTPUT_DIR = WORK_DIR / "outputs"
@@ -24,7 +26,7 @@ ALLOWED_EXTENSIONS = {".zip", ".rar"}
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 
-for folder in (WORK_DIR, UPLOAD_DIR, EXTRACT_DIR, OUTPUT_DIR):
+for folder in (WORK_DIR, JOB_DIR, UPLOAD_DIR, EXTRACT_DIR, OUTPUT_DIR):
     folder.mkdir(parents=True, exist_ok=True)
 
 jobs = {}
@@ -35,20 +37,46 @@ def allowed_file(filename):
     return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
 
 
+def job_file_path(job_id):
+    return JOB_DIR / f"{job_id}.json"
+
+
+def read_job(job_id):
+    path = job_file_path(job_id)
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    with jobs_lock:
+        return jobs.get(job_id)
+
+
+def write_job(job):
+    path = job_file_path(job["job_id"])
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(
+        json.dumps(job, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    tmp_path.replace(path)
+
+
 def update_job(job_id, **kwargs):
     with jobs_lock:
-        job = jobs[job_id]
+        job = jobs.get(job_id) or read_job(job_id) or {"job_id": job_id}
         job.update(kwargs)
+        jobs[job_id] = job
+        write_job(job)
 
 
 def append_job_error(job_id, filename, stage, reason):
     with jobs_lock:
-        job = jobs[job_id]
+        job = jobs.get(job_id) or read_job(job_id) or {"job_id": job_id}
         job.setdefault("errors", []).append({
             "文件名": filename,
             "阶段": stage,
             "原因": reason,
         })
+        jobs[job_id] = job
+        write_job(job)
 
 
 def extract_archive(archive_path, destination_dir):
@@ -140,12 +168,13 @@ def run_job(job_id, archive_path):
         process_pdf_folder(str(pdf_root), str(output_file), progress_callback=on_progress)
     except Exception as exc:
         append_job_error(job_id, "", "job", str(exc))
+        current_job = read_job(job_id) or {}
         update_job(
             job_id,
             stage="failed",
             message=str(exc),
             current_file="",
-            failure_count=jobs[job_id].get("failure_count", 0) or 1,
+            failure_count=current_job.get("failure_count", 0) or 1,
         )
 
 
@@ -169,22 +198,24 @@ def create_job():
     archive_path = UPLOAD_DIR / f"{job_id}_{filename}{ext}"
     upload.save(archive_path)
 
+    job = {
+        "job_id": job_id,
+        "stage": "queued",
+        "message": "任务已创建，等待开始",
+        "filename": upload.filename,
+        "created_at": int(time.time()),
+        "total_files": 0,
+        "processed_files": 0,
+        "success_count": 0,
+        "failure_count": 0,
+        "total_rows": 0,
+        "current_file": "",
+        "errors": [],
+        "download_url": "",
+    }
     with jobs_lock:
-        jobs[job_id] = {
-            "job_id": job_id,
-            "stage": "queued",
-            "message": "任务已创建，等待开始",
-            "filename": upload.filename,
-            "created_at": int(time.time()),
-            "total_files": 0,
-            "processed_files": 0,
-            "success_count": 0,
-            "failure_count": 0,
-            "total_rows": 0,
-            "current_file": "",
-            "errors": [],
-            "download_url": "",
-        }
+        jobs[job_id] = job
+        write_job(job)
 
     thread = threading.Thread(target=run_job, args=(job_id, archive_path), daemon=True)
     thread.start()
@@ -194,22 +225,20 @@ def create_job():
 
 @app.get("/api/jobs/<job_id>")
 def get_job(job_id):
-    with jobs_lock:
-        job = jobs.get(job_id)
-        if not job:
-            return jsonify({"error": "任务不存在"}), 404
-        return jsonify(job)
+    job = read_job(job_id)
+    if not job:
+        return jsonify({"error": "任务不存在"}), 404
+    return jsonify(job)
 
 
 @app.get("/api/jobs/<job_id>/download")
 def download_job_output(job_id):
-    with jobs_lock:
-        job = jobs.get(job_id)
-        if not job:
-            return jsonify({"error": "任务不存在"}), 404
-        output_file = job.get("output_file")
-        if job.get("stage") != "completed" or not output_file or not os.path.exists(output_file):
-            return jsonify({"error": "文件尚未生成"}), 400
+    job = read_job(job_id)
+    if not job:
+        return jsonify({"error": "任务不存在"}), 404
+    output_file = job.get("output_file")
+    if job.get("stage") != "completed" or not output_file or not os.path.exists(output_file):
+        return jsonify({"error": "文件尚未生成"}), 400
 
     return send_file(
         output_file,
