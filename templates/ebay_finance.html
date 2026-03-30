@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Amazon Summary 解析</title>
+  <title>eBay 财务报告解析</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&display=swap" rel="stylesheet">
@@ -12,21 +12,21 @@
 <body>
   <main class="page">
     <nav class="top-nav">
-      <a class="nav-link active" href="/">Amazon Summary</a>
-      <a class="nav-link" href="/ebay-finance">eBay 财务报告</a>
+      <a class="nav-link" href="/">Amazon Summary</a>
+      <a class="nav-link active" href="/ebay-finance">eBay 财务报告</a>
     </nav>
 
     <section class="hero">
-      <p class="eyebrow">Amazon Seller Central</p>
-      <h1>Summary 压缩包一键解析</h1>
-      <p class="intro">上传一个包含全部 PDF 的 <code>zip</code> 或 <code>rar</code> 压缩包，或者直接选择多个 <code>PDF</code>。系统会按账期月份匹配你维护的汇率，自动解析并生成 Excel。</p>
+      <p class="eyebrow">eBay Finance</p>
+      <h1>财务报告一键解析</h1>
+      <p class="intro">上传包含财务报告 PDF 的 <code>zip</code> / <code>rar</code> 压缩包，或者直接选择多个 <code>PDF</code> 文件。开始解析前，需要先维护汇率；也可以填写一个可选的店铺名覆盖值。</p>
     </section>
 
     <section class="panel">
       <form id="upload-form" class="upload-form">
         <div class="toolbar">
           <button id="rates-toggle-btn" class="ghost-btn" type="button">汇率维护</button>
-          <p class="toolbar-note">汇率默认为空，请先按月份维护美国 / 加拿大汇率，解析时会按 PDF 账期自动匹配。</p>
+          <p class="toolbar-note">汇率默认为空，解析时会按 PDF 识别出的归属月份自动匹配。页面刷新后任务状态和历史记录会保留。</p>
         </div>
 
         <section id="rates-panel" class="rates-panel hidden">
@@ -37,7 +37,7 @@
             </div>
           </div>
           <div class="rates-help">
-            每条配置对应一个月份和一个站点。系统会根据 PDF 识别出的账期月份，自动匹配对应汇率。
+            当前这套财务报告按月份匹配汇率。每条配置填写一个月份和对应汇率即可。
           </div>
           <div id="rates-list" class="rates-list"></div>
           <div class="rates-actions">
@@ -47,17 +47,24 @@
           <p id="rates-status" class="rates-status"></p>
         </section>
 
+        <div class="inline-form">
+          <label class="text-field">
+            <span>店铺名（可选）</span>
+            <input id="store-name" name="store_name" type="text" placeholder="留空则按文件名提取">
+          </label>
+        </div>
+
         <div class="upload-grid">
           <label id="upload-box" class="upload-box" for="archive">
             <input id="archive" name="archive" type="file" accept=".zip,.rar">
             <span id="upload-title" class="upload-title">选择压缩包</span>
-            <span id="upload-subtitle" class="upload-subtitle">支持 zip / rar，建议把所有 PDF 放在同一个压缩包里</span>
+            <span id="upload-subtitle" class="upload-subtitle">支持 zip / rar，建议把同一批财务报告 PDF 放在一个压缩包里</span>
           </label>
 
           <label id="pdf-upload-box" class="upload-box" for="pdf-files">
             <input id="pdf-files" name="pdf_files" type="file" accept=".pdf" multiple>
             <span id="pdf-upload-title" class="upload-title">直接选择多个 PDF</span>
-            <span id="pdf-upload-subtitle" class="upload-subtitle">支持一次选择多个 PDF 文件，无需先压缩</span>
+            <span id="pdf-upload-subtitle" class="upload-subtitle">支持一次选择多个财务报告 PDF，无需先压缩</span>
           </label>
         </div>
 
@@ -106,17 +113,9 @@
           <strong id="failure-count">0</strong>
         </article>
         <article class="stat-card">
-          <span>已跳过文件数</span>
-          <strong id="skipped-count">0</strong>
-        </article>
-        <article class="stat-card">
           <span>输出数据行</span>
           <strong id="total-rows">0</strong>
         </article>
-      </div>
-
-      <div class="scope-note">
-        `MX` 和 `BR` 站点数据不在当前统计范围内，系统会自动跳过，不计入失败。
       </div>
 
       <div class="current-file-box">
@@ -162,9 +161,12 @@
   </main>
 
   <script>
+    const API_BASE = '/api/ebay-finance';
+    const JOB_STORAGE_KEY = 'ebayFinanceCurrentJobId';
     const form = document.getElementById('upload-form');
     const archiveInput = document.getElementById('archive');
     const pdfFilesInput = document.getElementById('pdf-files');
+    const storeNameInput = document.getElementById('store-name');
     const uploadBox = document.getElementById('upload-box');
     const uploadTitle = document.getElementById('upload-title');
     const uploadSubtitle = document.getElementById('upload-subtitle');
@@ -194,7 +196,6 @@
     const totalFiles = document.getElementById('total-files');
     const successCount = document.getElementById('success-count');
     const failureCount = document.getElementById('failure-count');
-    const skippedCount = document.getElementById('skipped-count');
     const totalRows = document.getElementById('total-rows');
     const currentFile = document.getElementById('current-file');
     const errorsBody = document.getElementById('errors-body');
@@ -202,31 +203,30 @@
     const downloadLink = document.getElementById('download-link');
     const historyPanel = document.getElementById('history-panel');
     const historyList = document.getElementById('history-list');
-    const JOB_STORAGE_KEY = 'summaryAmazonPdfCurrentJobId';
-    const RATE_COUNTRIES = ['美国', '加拿大'];
 
     let timer = null;
     let currentJobId = null;
     let exchangeRatesLoaded = false;
 
+    function formatSize(size) {
+      if (!size && size !== 0) return '-';
+      if (size < 1024) return `${size} B`;
+      if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+      if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
+      return `${(size / 1024 / 1024 / 1024).toFixed(1)} GB`;
+    }
+
     function createRateRow(entry = {}) {
       const row = document.createElement('div');
-      row.className = 'rate-row';
+      row.className = 'rate-row compact';
       row.innerHTML = `
         <label>
           <span>月份</span>
           <input type="month" class="rate-month" value="${entry.month || ''}">
         </label>
         <label>
-          <span>站点</span>
-          <select class="rate-country">
-            <option value="">请选择站点</option>
-            ${RATE_COUNTRIES.map(country => `<option value="${country}" ${entry.country === country ? 'selected' : ''}>${country}</option>`).join('')}
-          </select>
-        </label>
-        <label>
           <span>汇率</span>
-          <input type="number" class="rate-value" value="${entry.rate ?? ''}" step="0.000001" min="0" placeholder="例如 7.1234">
+          <input type="number" class="rate-value" value="${entry.rate ?? ''}" step="0.000001" min="0" placeholder="例如 7.023">
         </label>
         <button type="button" class="rate-remove-btn">删除</button>
       `;
@@ -251,7 +251,6 @@
     function collectRateRows() {
       return Array.from(ratesList.querySelectorAll('.rate-row')).map((row) => ({
         month: row.querySelector('.rate-month').value,
-        country: row.querySelector('.rate-country').value,
         rate: row.querySelector('.rate-value').value,
       }));
     }
@@ -263,7 +262,7 @@
 
     async function loadExchangeRates() {
       try {
-        const response = await fetch('/api/exchange-rates');
+        const response = await fetch(`${API_BASE}/exchange-rates`);
         const payload = await response.json();
         if (!response.ok) {
           throw new Error(payload.error || '获取汇率失败');
@@ -281,14 +280,10 @@
       saveRatesBtn.disabled = true;
       setRatesStatus('正在同步汇率...');
       try {
-        const response = await fetch('/api/exchange-rates', {
+        const response = await fetch(`${API_BASE}/exchange-rates`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            rates: collectRateRows(),
-          }),
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rates: collectRateRows() }),
         });
         const payload = await response.json();
         if (!response.ok) {
@@ -304,20 +299,12 @@
       }
     }
 
-    function formatSize(size) {
-      if (!size && size !== 0) return '-';
-      if (size < 1024) return `${size} B`;
-      if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-      if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
-      return `${(size / 1024 / 1024 / 1024).toFixed(1)} GB`;
-    }
-
     function renderSelectedFile(file) {
       if (!file) {
         selectedFile.classList.add('hidden');
         uploadBox.classList.remove('has-file');
         uploadTitle.textContent = '选择压缩包';
-        uploadSubtitle.textContent = '支持 zip / rar，建议把所有 PDF 放在同一个压缩包里';
+        uploadSubtitle.textContent = '支持 zip / rar，建议把同一批财务报告 PDF 放在一个压缩包里';
         return;
       }
 
@@ -334,7 +321,7 @@
         selectedPdfs.classList.add('hidden');
         pdfUploadBox.classList.remove('has-file');
         pdfUploadTitle.textContent = '直接选择多个 PDF';
-        pdfUploadSubtitle.textContent = '支持一次选择多个 PDF 文件，无需先压缩';
+        pdfUploadSubtitle.textContent = '支持一次选择多个财务报告 PDF，无需先压缩';
         return;
       }
 
@@ -367,28 +354,6 @@
       return url.searchParams.get('job') || localStorage.getItem(JOB_STORAGE_KEY) || '';
     }
 
-    async function findLatestServerJob() {
-      try {
-        const response = await fetch('/api/jobs?limit=10');
-        const payload = await response.json();
-        if (!response.ok) {
-          return '';
-        }
-
-        const jobs = payload.jobs || [];
-        const activeJob = jobs.find(job => job.stage !== 'completed' && job.stage !== 'failed');
-        if (activeJob) {
-          return activeJob.job_id;
-        }
-        if (jobs.length > 0) {
-          return jobs[0].job_id;
-        }
-        return '';
-      } catch (error) {
-        return '';
-      }
-    }
-
     function setBadge(stage) {
       const stageMap = {
         queued: ['待处理', 'queued'],
@@ -408,7 +373,6 @@
         errorsBody.innerHTML = '';
         return;
       }
-
       errorsPanel.classList.remove('hidden');
       errorsBody.innerHTML = errors.map(item => `
         <tr>
@@ -448,7 +412,7 @@
               <span>状态：${job.stage || '-'}</span>
               <span>成功：${job.success_count || 0}</span>
               <span>失败：${job.failure_count || 0}</span>
-              <span>跳过：${job.skipped_count || 0}</span>
+              <span>行数：${job.total_rows || 0}</span>
             </div>
           </button>
         `;
@@ -466,7 +430,6 @@
             processed_files: 0,
             success_count: 0,
             failure_count: 0,
-            skipped_count: 0,
             total_rows: 0,
             current_file: '',
             errors: [],
@@ -478,11 +441,9 @@
 
     async function refreshHistory() {
       try {
-        const response = await fetch('/api/jobs?limit=8');
+        const response = await fetch(`${API_BASE}/jobs?limit=8`);
         const payload = await response.json();
-        if (!response.ok) {
-          return [];
-        }
+        if (!response.ok) return [];
         const jobs = payload.jobs || [];
         renderHistory(jobs);
         return jobs;
@@ -511,10 +472,8 @@
       totalFiles.textContent = total;
       successCount.textContent = job.success_count || 0;
       failureCount.textContent = job.failure_count || 0;
-      skippedCount.textContent = job.skipped_count || 0;
       totalRows.textContent = job.total_rows || 0;
       currentFile.textContent = job.current_file || '-';
-
       renderErrors(job.errors || []);
 
       if (job.stage === 'completed' && job.download_url) {
@@ -526,14 +485,11 @@
     }
 
     async function pollJob(jobId) {
-      if (timer) {
-        clearTimeout(timer);
-      }
-
+      if (timer) clearTimeout(timer);
       saveCurrentJobId(jobId);
 
       try {
-        const response = await fetch(`/api/jobs/${jobId}`);
+        const response = await fetch(`${API_BASE}/jobs/${jobId}`);
         const job = await response.json();
         if (!response.ok) {
           throw new Error(job.error || '获取任务状态失败');
@@ -610,13 +566,13 @@
         processed_files: 0,
         success_count: 0,
         failure_count: 0,
-        skipped_count: 0,
         total_rows: 0,
         current_file: '',
         errors: [],
       });
 
       const formData = new FormData();
+      formData.append('store_name', storeNameInput.value || '');
       if (archiveInput.files.length) {
         formData.append('archive', archiveInput.files[0]);
       } else {
@@ -626,7 +582,7 @@
       }
 
       try {
-        const response = await fetch('/api/jobs', {
+        const response = await fetch(`${API_BASE}/jobs`, {
           method: 'POST',
           body: formData,
         });
@@ -652,13 +608,7 @@
       if (!savedJobId) {
         savedJobId = (jobs.find(job => job.stage !== 'completed' && job.stage !== 'failed') || jobs[0] || {}).job_id || '';
       }
-      if (!savedJobId) {
-        savedJobId = await findLatestServerJob();
-      }
-      if (!savedJobId) {
-        return;
-      }
-
+      if (!savedJobId) return;
       submitBtn.disabled = true;
       renderJob({
         stage: 'queued',
@@ -667,7 +617,6 @@
         processed_files: 0,
         success_count: 0,
         failure_count: 0,
-        skipped_count: 0,
         total_rows: 0,
         current_file: '',
         errors: [],

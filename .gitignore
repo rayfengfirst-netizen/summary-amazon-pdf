@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 web_jobs/
+web_jobs_ebay_finance/
 *.xlsx
 *.zip
 *.rar

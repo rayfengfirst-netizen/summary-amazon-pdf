@@ -31,6 +31,32 @@ body {
   padding: 48px 0 64px;
 }
 
+.top-nav {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 16px;
+  border-radius: 999px;
+  text-decoration: none;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(43, 37, 32, 0.1);
+  font-weight: 700;
+}
+
+.nav-link.active {
+  color: #fff9f4;
+  background: linear-gradient(135deg, #c95f34, #944325);
+  border-color: transparent;
+}
+
 .hero {
   padding: 12px 4px 22px;
 }
@@ -92,6 +118,32 @@ h2 {
   flex-wrap: wrap;
 }
 
+.inline-form {
+  display: grid;
+  gap: 12px;
+}
+
+.text-field {
+  display: grid;
+  gap: 8px;
+}
+
+.text-field span {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.text-field input {
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 1px solid rgba(43, 37, 32, 0.12);
+  border-radius: 16px;
+  background: #fffdfa;
+  font: inherit;
+  color: var(--text);
+}
+
 .toolbar-note,
 .rates-help,
 .rates-status {
@@ -122,6 +174,10 @@ h2 {
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.7);
   border: 1px solid rgba(43, 37, 32, 0.08);
+}
+
+.rate-row.compact {
+  grid-template-columns: 1.2fr 1fr auto;
 }
 
 .rate-row label {
