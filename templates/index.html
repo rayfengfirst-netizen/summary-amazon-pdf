@@ -176,6 +176,28 @@
       return url.searchParams.get('job') || localStorage.getItem(JOB_STORAGE_KEY) || '';
     }
 
+    async function findLatestServerJob() {
+      try {
+        const response = await fetch('/api/jobs?limit=10');
+        const payload = await response.json();
+        if (!response.ok) {
+          return '';
+        }
+
+        const jobs = payload.jobs || [];
+        const activeJob = jobs.find(job => job.stage !== 'completed' && job.stage !== 'failed');
+        if (activeJob) {
+          return activeJob.job_id;
+        }
+        if (jobs.length > 0) {
+          return jobs[0].job_id;
+        }
+        return '';
+      } catch (error) {
+        return '';
+      }
+    }
+
     function setBadge(stage) {
       const stageMap = {
         queued: ['待处理', 'queued'],
@@ -324,8 +346,11 @@
       }
     });
 
-    window.addEventListener('load', () => {
-      const savedJobId = loadSavedJobId();
+    window.addEventListener('load', async () => {
+      let savedJobId = loadSavedJobId();
+      if (!savedJobId) {
+        savedJobId = await findLatestServerJob();
+      }
       if (!savedJobId) {
         return;
       }
@@ -333,7 +358,7 @@
       submitBtn.disabled = true;
       renderJob({
         stage: 'queued',
-        message: '正在恢复上一次任务状态',
+        message: '正在恢复最近任务状态',
         total_files: 0,
         processed_files: 0,
         success_count: 0,

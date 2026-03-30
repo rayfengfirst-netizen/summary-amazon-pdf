@@ -59,6 +59,17 @@ def write_job(job):
     tmp_path.replace(path)
 
 
+def list_jobs(limit=10):
+    records = []
+    for path in sorted(JOB_DIR.glob("*.json"), reverse=True):
+        try:
+            records.append(json.loads(path.read_text(encoding="utf-8")))
+        except Exception:
+            continue
+    records.sort(key=lambda item: item.get("created_at", 0), reverse=True)
+    return records[:limit]
+
+
 def update_job(job_id, **kwargs):
     with jobs_lock:
         job = jobs.get(job_id) or read_job(job_id) or {"job_id": job_id}
@@ -229,6 +240,13 @@ def get_job(job_id):
     if not job:
         return jsonify({"error": "任务不存在"}), 404
     return jsonify(job)
+
+
+@app.get("/api/jobs")
+def get_jobs():
+    limit = request.args.get("limit", default=10, type=int)
+    limit = max(1, min(limit, 50))
+    return jsonify({"jobs": list_jobs(limit=limit)})
 
 
 @app.get("/api/jobs/<job_id>/download")
