@@ -285,6 +285,56 @@ h2 {
   background: rgba(255, 255, 255, 0.72);
 }
 
+.history-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.history-item {
+  width: 100%;
+  padding: 16px 18px;
+  border: 1px solid rgba(43, 37, 32, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.76);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.history-item:hover {
+  transform: translateY(-1px);
+  border-color: rgba(29, 107, 99, 0.35);
+}
+
+.history-item.active {
+  border-color: rgba(191, 79, 40, 0.45);
+  background: rgba(191, 79, 40, 0.08);
+}
+
+.history-main,
+.history-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.history-main strong {
+  font-size: 16px;
+}
+
+.history-main span,
+.history-meta span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.history-meta {
+  margin-top: 8px;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

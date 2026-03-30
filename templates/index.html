@@ -99,6 +99,16 @@
         </table>
       </div>
     </section>
+
+    <section id="history-panel" class="panel hidden">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">最近任务</p>
+          <h2>任务历史</h2>
+        </div>
+      </div>
+      <div id="history-list" class="history-list"></div>
+    </section>
   </main>
 
   <script>
@@ -126,6 +136,8 @@
     const errorsBody = document.getElementById('errors-body');
     const downloadWrap = document.getElementById('download-wrap');
     const downloadLink = document.getElementById('download-link');
+    const historyPanel = document.getElementById('history-panel');
+    const historyList = document.getElementById('history-list');
     const JOB_STORAGE_KEY = 'summaryAmazonPdfCurrentJobId';
 
     let timer = null;
@@ -228,6 +240,76 @@
       `).join('');
     }
 
+    function formatTime(timestamp) {
+      if (!timestamp) return '-';
+      try {
+        return new Date(timestamp * 1000).toLocaleString('zh-CN', { hour12: false });
+      } catch (error) {
+        return '-';
+      }
+    }
+
+    function renderHistory(jobs) {
+      if (!jobs || jobs.length === 0) {
+        historyPanel.classList.add('hidden');
+        historyList.innerHTML = '';
+        return;
+      }
+
+      historyPanel.classList.remove('hidden');
+      historyList.innerHTML = jobs.map(job => {
+        const active = currentJobId === job.job_id ? 'active' : '';
+        return `
+          <button class="history-item ${active}" type="button" data-job-id="${job.job_id}">
+            <div class="history-main">
+              <strong>${job.filename || job.job_id}</strong>
+              <span>${formatTime(job.created_at)}</span>
+            </div>
+            <div class="history-meta">
+              <span>状态：${job.stage || '-'}</span>
+              <span>成功：${job.success_count || 0}</span>
+              <span>失败：${job.failure_count || 0}</span>
+            </div>
+          </button>
+        `;
+      }).join('');
+
+      historyList.querySelectorAll('[data-job-id]').forEach((item) => {
+        item.addEventListener('click', () => {
+          const jobId = item.getAttribute('data-job-id');
+          if (!jobId) return;
+          submitBtn.disabled = true;
+          renderJob({
+            stage: 'queued',
+            message: '正在打开所选任务',
+            total_files: 0,
+            processed_files: 0,
+            success_count: 0,
+            failure_count: 0,
+            total_rows: 0,
+            current_file: '',
+            errors: [],
+          });
+          pollJob(jobId);
+        });
+      });
+    }
+
+    async function refreshHistory() {
+      try {
+        const response = await fetch('/api/jobs?limit=8');
+        const payload = await response.json();
+        if (!response.ok) {
+          return [];
+        }
+        const jobs = payload.jobs || [];
+        renderHistory(jobs);
+        return jobs;
+      } catch (error) {
+        return [];
+      }
+    }
+
     function renderJob(job) {
       statusPanel.classList.remove('hidden');
       statusTitle.textContent = {
@@ -276,6 +358,7 @@
         }
 
         renderJob(job);
+        refreshHistory();
 
         if (job.stage !== 'completed' && job.stage !== 'failed') {
           timer = setTimeout(() => pollJob(jobId), 1000);
@@ -337,6 +420,7 @@
           throw new Error(payload.error || '上传失败');
         }
         saveCurrentJobId(payload.job_id);
+        refreshHistory();
         pollJob(payload.job_id);
       } catch (error) {
         submitBtn.disabled = false;
@@ -347,7 +431,11 @@
     });
 
     window.addEventListener('load', async () => {
+      const jobs = await refreshHistory();
       let savedJobId = loadSavedJobId();
+      if (!savedJobId) {
+        savedJobId = (jobs.find(job => job.stage !== 'completed' && job.stage !== 'failed') || jobs[0] || {}).job_id || '';
+      }
       if (!savedJobId) {
         savedJobId = await findLatestServerJob();
       }
