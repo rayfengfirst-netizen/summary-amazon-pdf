@@ -103,6 +103,13 @@ h2 {
   border-color: rgba(191, 79, 40, 0.7);
 }
 
+.upload-box.has-file {
+  border-color: rgba(29, 107, 99, 0.6);
+  background:
+    linear-gradient(135deg, rgba(29, 107, 99, 0.12), rgba(191, 79, 40, 0.08)),
+    #fffdf8;
+}
+
 .upload-box input {
   display: none;
 }
@@ -119,6 +126,34 @@ h2 {
   max-width: 420px;
   color: var(--muted);
   line-height: 1.6;
+}
+
+.selected-file {
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(29, 107, 99, 0.16);
+  background: rgba(29, 107, 99, 0.08);
+}
+
+.selected-file span {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.selected-file strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 18px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.selected-file small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .submit-btn,
